@@ -2,7 +2,7 @@
 
 A modded version of [PokéSurvivor](https://github.com/JPTER78/pokesurvivor) by JPTER78: a free, non-profit Pokémon survival fan game that runs in your browser.
 
-**Play:** https://intox2b20.github.io/pokesurvivor-plus/
+**Play:** https://startide2025.github.io/pokesurvivor-plus-sites.google.com
 
 By default this public version runs without any server: your progress is saved in your browser (no online accounts, friends, co-op or leaderboard).
 
