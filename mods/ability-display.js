@@ -119,28 +119,45 @@
     }
   }
 
+  // ── Extract dex number from the detail panel ─────────────────────────────
+  function extractDex(detail) {
+    // 1. data attribute on any child element
+    var numEl = detail.querySelector('[data-dex],[data-id],[data-mon]');
+    if (numEl) {
+      var d = parseInt(numEl.dataset.dex || numEl.dataset.id || numEl.dataset.mon);
+      if (d > 0) return d;
+    }
+
+    // 2. Scan ALL text nodes for a dex number pattern:
+    //    "Nº 025", "No. 025", "#025", "025 ·", plain "025" after º/°/N
+    var text = detail.textContent || '';
+    var patterns = [
+      /N[º°o\.]\s*0*(\d{1,4})/i,   // Nº 025, No. 025, N° 025
+      /#\s*0*(\d{1,4})/,             // #025
+      /\b0*(\d{1,4})\s*[·\-–]/,     // 025 · Kanto
+    ];
+    for (var i = 0; i < patterns.length; i++) {
+      var m = text.match(patterns[i]);
+      if (m) { var n = parseInt(m[1]); if (n > 0 && n <= 1025) return n; }
+    }
+    return null;
+  }
+
   // ── Watch #dex-detail for content changes ────────────────────────────────
   document.addEventListener('DOMContentLoaded', function () {
-    var detail = document.getElementById('dex-detail');
-    if (!detail) return;
+    // The detail panel may not exist at DOMContentLoaded if the game
+    // builds it dynamically — watch the whole dex screen instead.
+    var root = document.querySelector('.dex-wrap, .dex-box') || document.body;
 
     new MutationObserver(function () {
-      // Try to extract the dex number from the panel content
-      // The game usually puts "Nº 025" or "#025" or a data-dex attribute
-      var numEl = detail.querySelector('[data-dex], [data-id]');
-      var dex = numEl && (parseInt(numEl.dataset.dex) || parseInt(numEl.dataset.id));
+      var detail = document.getElementById('dex-detail');
+      if (!detail || !detail.children.length) return;
 
-      if (!dex) {
-        // Fall back: scan text for "Nº 025" / "No. 025" / "#025"
-        var text = detail.textContent || '';
-        var m = text.match(/[Nn][°oº\.]\s*0*(\d+)/);
-        if (m) dex = parseInt(m[1]);
-      }
-
+      var dex = extractDex(detail);
       if (dex && dex !== lastDex) {
         lastDex = dex;
         injectAbility(dex);
       }
-    }).observe(detail, { childList: true, subtree: true, characterData: true });
+    }).observe(root, { childList: true, subtree: true });
   });
 })();
