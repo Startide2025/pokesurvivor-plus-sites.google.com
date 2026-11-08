@@ -757,84 +757,37 @@
   </div>
 </section>
 
-<!-- PS Render Scale: intercepts devicePixelRatio so the game's own resize logic
-     applies our scale factor. Slider is injected into the Graphics settings tab. -->
+<!-- ═══════════════════════════════════════════════════════════════════════
+     PS MOD LOADER  —  reads mods.json, then injects each mod as a <script>.
+     Add or remove mods by editing mods.json (no index.html change needed).
+     Mods live in mods/*.js and run after DOMContentLoaded.
+     ═══════════════════════════════════════════════════════════════════════ -->
 <script>
 (function () {
-  var STORAGE_KEY = 'ps_render_scale';
-  var _scale = parseFloat(localStorage.getItem(STORAGE_KEY) || '1');
-
-  // Intercept devicePixelRatio so the game's resize function picks up our scale.
-  // The game does: pixelRatio = Math.min(qualityCap, devicePixelRatio)
-  // So feeding a scaled dpr is enough — the game passes logical size separately
-  // to its coordinate system, so input/gameplay are unaffected.
-  var _realDPR = window.devicePixelRatio || 1;
-  Object.defineProperty(window, 'devicePixelRatio', {
-    get: function () { return _realDPR * _scale; },
-    configurable: true
-  });
-
-  function applyScale(v) {
-    _scale = v;
-    localStorage.setItem(STORAGE_KEY, v);
-    window.dispatchEvent(new Event('resize'));
-  }
-
-  // Inject slider into the Graphics (gfx) settings tab when it opens.
-  // The game builds tab content dynamically into #set-body, so we watch for it.
-  var injected = false;
-  function tryInject() {
-    if (injected) return;
-    var body = document.getElementById('set-body');
-    if (!body) return;
-    // Only inject when the gfx tab is active (look for a language selector as a marker)
-    if (!body.querySelector('select') && !body.innerHTML.includes('Idioma') &&
-        !body.innerHTML.includes('Language')) return;
-
-    // Check we haven't already added it
-    if (body.querySelector('#ps-scale-row')) return;
-    injected = true;
-
-    var pct = Math.round(_scale * 100);
-    var row = document.createElement('div');
-    row.id = 'ps-scale-row';
-    row.className = 'set-row';
-    row.style.cssText = 'display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap';
-    row.innerHTML =
-      '<span style="min-width:120px;font-size:14px">Render scale</span>' +
-      '<input id="ps-scale-slider" type="range" min="50" max="200" step="5" value="' + pct + '"' +
-      '  style="flex:1;min-width:120px;accent-color:var(--gold,#f5c842)">' +
-      '<span id="ps-scale-val" style="min-width:40px;text-align:right;font-size:14px">' + pct + '%</span>' +
-      '<button id="ps-scale-reset" class="btn small ghost" style="margin-left:4px">Reset</button>';
-
-    body.appendChild(row);
-
-    var slider = document.getElementById('ps-scale-slider');
-    var label  = document.getElementById('ps-scale-val');
-    var reset  = document.getElementById('ps-scale-reset');
-
-    slider.addEventListener('input', function () {
-      label.textContent = slider.value + '%';
+  var bust = Date.now();
+  fetch('mods.json?' + bust)
+    .then(function (r) { return r.json(); })
+    .then(function (cfg) {
+      (cfg.mods || []).forEach(function (name) {
+        var s = document.createElement('script');
+        s.src = 'mods/' + name + '.js?' + bust;
+        s.onerror = function () {
+          console.warn('[PokéMods] Failed to load mod: ' + name);
+        };
+        document.head.appendChild(s);
+      });
+    })
+    .catch(function (e) {
+      console.warn('[PokéMods] Failed to load mods.json', e);
     });
-    slider.addEventListener('change', function () {
-      applyScale(parseInt(slider.value) / 100);
-    });
-    reset.addEventListener('click', function () {
-      slider.value = 100;
-      label.textContent = '100%';
-      applyScale(1);
-    });
-  }
-
-  // Re-check every time #set-body changes (game swaps tab content in)
-  document.addEventListener('DOMContentLoaded', function () {
-    var body = document.getElementById('set-body');
-    if (!body) return;
-    new MutationObserver(function () { injected = false; tryInject(); })
-      .observe(body, { childList: true, subtree: true, characterData: true });
-  });
 })();
 </script>
+
+<!-- REMOVED: inline Render Scale script (now mods/render-scale.js) -->
+<!-- REMOVED: inline Ability System script (now mods/abilities.js)   -->
+<!-- Note: sort-buttons mod is new (mods/sort-buttons.js)            -->
+
+<!-- [old inline scripts removed — now loaded via mod loader above] -->
 
 <!-- datos generados -->
 <script src="config.js"></script>
