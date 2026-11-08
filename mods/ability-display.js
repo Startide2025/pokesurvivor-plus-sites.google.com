@@ -143,21 +143,19 @@
     return null;
   }
 
-  // ── Watch #dex-detail for content changes ────────────────────────────────
-  document.addEventListener('DOMContentLoaded', function () {
-    // The detail panel may not exist at DOMContentLoaded if the game
-    // builds it dynamically — watch the whole dex screen instead.
-    var root = document.querySelector('.dex-wrap, .dex-box') || document.body;
+  // ── Watch for dex-detail changes ─────────────────────────────────────────
+  function tryUpdate() {
+    var detail = document.getElementById('dex-detail');
+    if (!detail || !detail.textContent.trim()) return;
+    var dex = extractDex(detail);
+    if (dex && dex !== lastDex) {
+      lastDex = dex;
+      injectAbility(dex);
+    }
+  }
 
-    new MutationObserver(function () {
-      var detail = document.getElementById('dex-detail');
-      if (!detail || !detail.children.length) return;
-
-      var dex = extractDex(detail);
-      if (dex && dex !== lastDex) {
-        lastDex = dex;
-        injectAbility(dex);
-      }
-    }).observe(root, { childList: true, subtree: true });
+  // Watch body from the start — game builds DOM dynamically long after load
+  new MutationObserver(tryUpdate).observe(document.documentElement, {
+    childList: true, subtree: true
   });
 })();
