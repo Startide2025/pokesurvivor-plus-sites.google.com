@@ -2,6 +2,7 @@
   "mods": [
     "render-scale",
     "sort-buttons",
-    "abilities"
+    "abilities",
+    "ability-display"
   ]
 }
