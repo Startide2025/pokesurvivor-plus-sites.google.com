@@ -1,90 +1,74 @@
 // PS Mod: Sort Buttons
-// Adds Sort A-Z / Sort by Type buttons to the move-pick screen.
+// Adds Sort A-Z / Sort by Type buttons to the Pokémon selection grid (#dex-grid).
 // Works on desktop and mobile (44px touch targets, flex-wrap).
 (function () {
   'use strict';
 
   var STORAGE_KEY = 'ps_sort_mode';
-  var sortMode = localStorage.getItem(STORAGE_KEY) || 'default';
+  var sortMode = 'default';
+  try { sortMode = localStorage.getItem(STORAGE_KEY) || 'default'; } catch(e){}
 
-  // ── Helpers ──────────────────────────────────────────────────────────────
-  function getCardsContainer() {
-    // The game renders move options into .cards inside the level-up screen
-    return document.querySelector('#scr-lvl .cards, #scr-bond .cards, #scr-stone .cards');
-  }
+  // ── Sort logic ────────────────────────────────────────────────────────────
+  function getGrid() { return document.getElementById('dex-grid'); }
 
-  function getCards() {
-    var c = getCardsContainer();
-    return c ? Array.prototype.slice.call(c.children) : [];
-  }
-
-  function sortCards(mode) {
-    var container = getCardsContainer();
-    if (!container) return;
-    var cards = getCards();
+  function sortGrid(mode) {
+    var grid = getGrid();
+    if (!grid) return;
+    var cards = Array.prototype.slice.call(grid.children);
     if (cards.length < 2) return;
 
-    var sorted;
-    if (mode === 'alpha') {
-      sorted = cards.slice().sort(function (a, b) {
-        var na = (a.querySelector('.card-name, h3, strong') || a).textContent.trim();
-        var nb = (b.querySelector('.card-name, h3, strong') || b).textContent.trim();
-        return na.localeCompare(nb);
-      });
-    } else if (mode === 'type') {
-      sorted = cards.slice().sort(function (a, b) {
-        // type badge has a class like "type-fire", "type-water", etc.
-        var ta = (a.querySelector('[class*="type-"]') || {className: ''}).className;
-        var tb = (b.querySelector('[class*="type-"]') || {className: ''}).className;
-        return ta.localeCompare(tb);
-      });
-    } else {
-      // 'default' — restore original DOM order via data-index
-      sorted = cards.slice().sort(function (a, b) {
-        return (parseInt(a.dataset.sortIdx) || 0) - (parseInt(b.dataset.sortIdx) || 0);
-      });
-    }
-
-    // Stamp original indices if not set
+    // Stamp original order on first sort
     cards.forEach(function (c, i) {
       if (!c.dataset.sortIdx) c.dataset.sortIdx = i;
     });
 
+    var sorted;
+    if (mode === 'alpha') {
+      sorted = cards.slice().sort(function (a, b) {
+        var na = (a.querySelector('.dex-name, [class*="name"]') || a).textContent.trim();
+        var nb = (b.querySelector('.dex-name, [class*="name"]') || b).textContent.trim();
+        return na.localeCompare(nb);
+      });
+    } else if (mode === 'type') {
+      sorted = cards.slice().sort(function (a, b) {
+        var ta = (a.querySelector('[class*="type-"], .type') || {className:''}).className;
+        var tb = (b.querySelector('[class*="type-"], .type') || {className:''}).className;
+        return ta.localeCompare(tb);
+      });
+    } else {
+      sorted = cards.slice().sort(function (a, b) {
+        return (parseInt(a.dataset.sortIdx)||0) - (parseInt(b.dataset.sortIdx)||0);
+      });
+    }
+
     var frag = document.createDocumentFragment();
     sorted.forEach(function (c) { frag.appendChild(c); });
-    container.appendChild(frag);
+    grid.appendChild(frag);
   }
 
-  // ── Toolbar injection ─────────────────────────────────────────────────────
-  function injectToolbar(screen) {
-    if (screen.querySelector('#ps-sort-bar')) return;
+  // ── Toolbar ───────────────────────────────────────────────────────────────
+  function injectToolbar() {
+    var bar = document.getElementById('ps-sort-bar');
+    var dexLeft = document.querySelector('.dex-left');
+    var grid = getGrid();
+    if (!dexLeft || !grid) return;
+    if (bar) return; // already injected
 
-    var bar = document.createElement('div');
+    bar = document.createElement('div');
     bar.id = 'ps-sort-bar';
-    bar.style.cssText = [
-      'display:flex',
-      'flex-wrap:wrap',
-      'gap:6px',
-      'justify-content:center',
-      'margin:6px 0 2px',
-    ].join(';');
+    bar.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;margin:6px 0;';
 
     function makeBtn(label, mode) {
       var b = document.createElement('button');
       b.textContent = label;
       b.dataset.sortMode = mode;
       b.className = 'btn small ghost';
-      b.style.cssText = 'min-height:44px;padding:0 14px;font-size:13px';
+      b.style.cssText = 'min-height:44px;padding:0 14px;font-size:13px;';
       b.setAttribute('aria-pressed', sortMode === mode ? 'true' : 'false');
       b.addEventListener('click', function () {
         sortMode = mode;
         try { localStorage.setItem(STORAGE_KEY, mode); } catch(e){}
-        // Stamp current order if switching to default
-        if (mode === 'default') {
-          getCards().forEach(function (c, i) { c.dataset.sortIdx = i; });
-        }
-        sortCards(mode);
-        // Update aria-pressed
+        sortGrid(mode);
         bar.querySelectorAll('button').forEach(function (btn) {
           btn.setAttribute('aria-pressed', btn.dataset.sortMode === mode ? 'true' : 'false');
         });
@@ -96,43 +80,17 @@
     bar.appendChild(makeBtn('By type', 'type'));
     bar.appendChild(makeBtn('Default', 'default'));
 
-    // Insert before the cards container
-    var container = screen.querySelector('.cards');
-    if (container) {
-      screen.querySelector('.box, div').insertBefore(bar, container);
-    } else {
-      screen.appendChild(bar);
-    }
+    // Insert before the grid
+    dexLeft.insertBefore(bar, grid);
 
-    // Sort immediately if a mode was remembered
-    if (sortMode !== 'default') sortCards(sortMode);
+    if (sortMode !== 'default') sortGrid(sortMode);
   }
 
-  function removeToolbar(screen) {
-    var bar = screen && screen.querySelector('#ps-sort-bar');
-    if (bar) bar.remove();
-  }
-
-  // ── Watch for level-up / bond / stone screens becoming visible ────────────
-  var SCREEN_IDS = ['scr-lvl', 'scr-bond', 'scr-stone'];
-
-  function checkScreens() {
-    SCREEN_IDS.forEach(function (id) {
-      var el = document.getElementById(id);
-      if (!el) return;
-      if (!el.classList.contains('hidden') && el.style.display !== 'none') {
-        injectToolbar(el);
-      } else {
-        removeToolbar(el);
-      }
-    });
-  }
-
+  // ── Watch for dex screen ──────────────────────────────────────────────────
   document.addEventListener('DOMContentLoaded', function () {
-    // Watch the whole body for class / style changes on screens
-    new MutationObserver(checkScreens)
-      .observe(document.body, { attributes: true, subtree: true,
-                                 attributeFilter: ['class', 'style'] });
-    checkScreens();
+    new MutationObserver(function () {
+      var grid = getGrid();
+      if (grid && grid.children.length > 0) injectToolbar();
+    }).observe(document.body, { childList: true, subtree: true });
   });
 })();

@@ -206,7 +206,7 @@
 
     // ── Kill-tracking abilities ──────────────────────────────────────────
     if (newKills > 0) {
-      state.lastKills = kills;
+      state.lastKills = kills;  // update BEFORE computing add, so it only fires once
       if (ab === 'moxie') {
         var cap = 0.50;
         var add = Math.min(newKills * 0.02, cap - state.moxieBoost);
@@ -234,14 +234,22 @@
       { heal(p, p.maxHp * 0.02); state.regenTimer = t; }
 
     if (ab === 'moody' && t > state.moodyTimer) {
-      var stats = ['atkMul', 'spdMul', 'cdMul'];
-      if (state.moodyLast) { p[state.moodyLast.up] /= 1.20; p[state.moodyLast.dn] /= 0.90; }
-      var pick = Math.floor(Math.random() * 3);
-      var dnPick = (pick + 1 + Math.floor(Math.random() * 2)) % 3;
-      var newUp = stats[pick], newDn = stats[dnPick];
-      if (newDn === 'cdMul') { p[newUp] *= 1.20; p[newDn] *= 1.10; }
-      else                   { p[newUp] *= 1.20; p[newDn] *= 0.90; }
-      state.moodyLast = { up: newUp, dn: newDn };
+      var mStats = ['atkMul', 'spdMul', 'cdMul'];
+      // Revert previous moody changes before applying new ones
+      if (state.moodyLast) {
+        p[state.moodyLast.up] /= 1.20;
+        // cdMul was boosted (lower = faster), others were reduced
+        if (state.moodyLast.dn === 'cdMul') p[state.moodyLast.dn] /= 1.10;
+        else                                p[state.moodyLast.dn] /= 0.90;
+      }
+      var mPick = Math.floor(Math.random() * 3);
+      var mDnPick = (mPick + 1 + Math.floor(Math.random() * 2)) % 3;
+      var mUp = mStats[mPick], mDn = mStats[mDnPick];
+      p[mUp] *= 1.20;
+      // cdMul lower = faster, so "nerf" means increase it
+      if (mDn === 'cdMul') p[mDn] *= 1.10;
+      else                 p[mDn] *= 0.90;
+      state.moodyLast = { up: mUp, dn: mDn };
       state.moodyTimer = t + 10;
     }
 
@@ -259,29 +267,28 @@
       }
     }
 
-    // Disguise: once per 60s, negate one hit by healing
+    // Hit detection: invuln transitions from 0 → positive means a hit just landed
+    var tookHit = p.invuln > 0 && state.lastInvuln <= 0;
+
+    // Disguise: once per 60s, fully negate one hit
     if (ab === 'disguise') {
-      var hitNow = p.invuln > 0 && state.lastInvuln <= 0;
-      if (hitNow && state.disguiseUp && t > state.disguiseNextAllow) {
+      if (tookHit && state.disguiseUp && t > state.disguiseNextAllow) {
         heal(p, 999); state.disguiseUp = false; state.disguiseNextAllow = t + 60;
       }
       if (!state.disguiseUp && t > state.disguiseNextAllow) state.disguiseUp = true;
-      state.lastInvuln = p.invuln;
     }
 
     // Battle Armor: 20% chance to heal ~one hit's worth on each hit
     if (ab === 'battlearmor') {
-      var hitNow2 = p.invuln > 0 && state.lastInvuln <= 0;
-      if (hitNow2 && Math.random() < 0.20) heal(p, p.maxHp * 0.10);
-      state.lastInvuln = p.invuln;
+      if (tookHit && Math.random() < 0.20) heal(p, p.maxHp * 0.10);
     }
 
     // Stamina: each hit +1% dmgReduce up to 50%
     if (ab === 'stamina') {
-      var hitNow3 = p.invuln > 0 && state.lastInvuln <= 0;
-      if (hitNow3) p.dmgReduce = Math.min(0.50, p.dmgReduce + 0.01);
-      state.lastInvuln = p.invuln;
+      if (tookHit) p.dmgReduce = Math.min(0.50, p.dmgReduce + 0.01);
     }
+
+    state.lastInvuln = p.invuln;  // update once, shared by all hit-detection abilities
 
     // ── Contact abilities ────────────────────────────────────────────────
     var contactRadius = 32;
@@ -305,8 +312,10 @@
           else                  { if (en.applySlow)   en.applySlow(0.5, 1); }
         }
         else if (ab === 'roughskin') {
-          en.hp -= Math.max(1, (en.maxHp || 100) * 0.05);
-          if (en.hp <= 0) en.dead = true;
+          // Deal 5% max HP as direct damage; use takeDamage if available
+          var rsDmg = Math.max(1, (en.maxHp || en.hp || 100) * 0.05);
+          if (typeof en.takeDamage === 'function') en.takeDamage(rsDmg);
+          else en.hp -= rsDmg;
         }
         else if (ab === 'cursedbody') {
           if (en.applySlow) en.applySlow(0.8, 3);
