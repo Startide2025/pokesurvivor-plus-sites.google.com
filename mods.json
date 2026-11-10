@@ -1,6 +1,7 @@
 {
   "mods": [
     "render-scale",
+    "ability-data",
     "abilities",
     "ability-display"
   ]
