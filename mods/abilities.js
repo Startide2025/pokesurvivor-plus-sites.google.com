@@ -39,7 +39,9 @@
   var FLINCH      = 2;           // flinch -> fear 2 s (King's Rock)
   var PARA        = 1;           // paralysis or sleep on a foe -> stun 1 s (moves' paraP)
   var SPEED_DROP  = 0.35;        // -1 Speed on a foe -> slow 0.35 (Bulldoze)
-  var ABILITY_WEATHER = 9999;    // ability weather lasts until replaced (Gen 3-5 rule)
+  // Ability weather lasts until replaced (Gen 3-5 rule). 1e7 s (~115 days) outlasts any endless
+  // run; it must stay finite because co-op sends it as JSON, where Infinity becomes null.
+  var ABILITY_WEATHER = 1e7;
   var MISS_EVADE  = 0.2;         // +1 evasion -> foes hit 80% of the time
   var HUSTLE_MISS = 0.2;         // Hustle: physical moves hit 80% of the time
 
@@ -123,13 +125,47 @@
   function sunny() { var k = weather(); return k === 'sun' || k === 'harsh'; }
   function sandy() { return weather() === 'sand'; }
   function snowy() { var k = weather(); return k === 'snow' || k === 'hail'; }
-  function setWeather(kind) {
+  // Co-op: the game only lets the host send weather, so the host's weather is the shared one.
+  // A guest's setter only fills an empty slot (it never overrides the host's weather); strong
+  // weathers still override normal ones, like in mainline.
+  var STRONG_WX = { storm: 1, harsh: 1, winds: 1 };
+  function coopRole() { // 'host' | 'guest' | null  (S.coopRole lets tests simulate a role)
+    if (S.coopRole) return S.coopRole;
+    var C = P().Coop;
+    return C && C.active ? (C.isHost ? 'host' : 'guest') : null;
+  }
+  function coopGuest() { return coopRole() === 'guest'; }
+  function setWeather(kind, strong) {
     var Wx = P().Weather; if (!Wx) return;
     var c = Wx.current;
     S.v.wx = kind;
     if (c && c.kind === kind && c.left > 60) return;
-    if (P().Coop && P().Coop.isHost && Wx.debugStart) Wx.debugStart(kind, ABILITY_WEATHER);
+    if (c && coopGuest() && !strong) return;
+    if (coopRole() === 'host' && Wx.debugStart) Wx.debugStart(kind, ABILITY_WEATHER);
     else Wx.force(kind, ABILITY_WEATHER);
+  }
+  // Weather setters keep their weather: when the slot empties (a rift arena or Arceus fight
+  // cleared it, or a co-op host's weather ran out) it's summoned again, like re-entering battle.
+  // Strong weathers (Primal / Mega Rayquaza) can't be replaced at all while the form lasts.
+  function keepWeather(strong) {
+    var Wx = P().Weather, G = P();
+    if (!S.v.wx || !Wx || (G.Game && G.Game.training)) return;
+    var c = Wx.current;
+    // Host: repeat our weather every 5 s so a guest who missed the message (their run start
+    // wipes weather) catches up. Guests ignore repeats of weather they already have.
+    if (c && c.kind === S.v.wx && coopRole() === 'host' && S.t - (S.v.wxSent || -99) >= 5) {
+      S.v.wxSent = S.t;
+      G.Coop.broadcast(['wx', c.kind, c.left]);
+    }
+    // Two strong weathers (e.g. Primal Kyogre and Primal Groudon in co-op) accept each other.
+    if (c && strong && c.kind !== S.v.wx && STRONG_WX[c.kind]) { S.v.wxEmpty = null; return; }
+    if (c && (!strong || c.kind === S.v.wx)) { S.v.wxEmpty = null; return; }
+    // Weather that was just forced reads as empty for a frame (its fade-in starts at 0),
+    // so only act once the slot has stayed empty (or wrong, for strong weather) for 0.5 s.
+    if (S.v.wxEmpty == null) { S.v.wxEmpty = S.t; return; }
+    if (S.t - S.v.wxEmpty < 0.5 || S.t - (S.v.wxRetry || -99) < 3) return;
+    S.v.wxRetry = S.t; S.v.wxEmpty = null;
+    setWeather(S.v.wx, strong);
   }
   function clearOwnWeather() {
     var Wx = P().Weather, c = Wx && Wx.current;
@@ -290,7 +326,17 @@
   function none(why, d) { return { none: why, d: d }; }
 
   function weatherSetter(kind, label) {
-    return { d: 'Summons ' + label + ' when it enters battle (run start, Mega Evolution, evolving into it). Ability weather lasts until another weather replaces it.', start: function () { setWeather(kind); } };
+    return {
+      d: 'Summons ' + label + ' for the rest of the run. If other weather replaces it, ' + label + ' returns once that ends.',
+      start: function () { setWeather(kind); },
+      tick: function () { keepWeather(false); },
+    };
+  }
+  function terrainSetter(kind, d) {
+    return { d: d + ' Lasts the whole run, and returns if other weather replaces it.', start: function () { setWeather(kind); }, tick: function () { keepWeather(false); } };
+  }
+  function strongWeather(kind, d) {
+    return { d: d + ' No other weather can replace it. Ends with the form.', start: function () { setWeather(kind, true); }, tick: function () { keepWeather(true); }, end: clearOwnWeather };
   }
   // Type immunity: blocks attacks of that type (and pools of that type, silently).
   function immuneTo(type, label, then, extra) {
@@ -323,14 +369,17 @@
   def('drought', weatherSetter('sun', 'harsh sunlight'));
   def('sandstream', weatherSetter('sand', 'a sandstorm'));
   def('snowwarning', weatherSetter('snow', 'snow'));
-  def('electricsurge', { d: 'Sets Electric Terrain when it enters: Electric moves x1.3 and nobody can fall asleep.', start: function () { setWeather('electric'); } });
-  def('grassysurge', { d: 'Sets Grassy Terrain when it enters: Grass moves x1.3 and everyone slowly heals.', start: function () { setWeather('grassy'); } });
-  def('mistysurge', { d: 'Sets Misty Terrain when it enters: Dragon moves x0.5 and nobody gets statused.', start: function () { setWeather('misty'); } });
-  def('psychicsurge', { d: 'Sets Psychic Terrain when it enters: Psychic moves x1.3.', start: function () { setWeather('psychic'); } });
-  def('primordialsea', { d: 'Heavy rain while in this form: Water x1.5, Fire almost does nothing. Ends with the form.', start: function () { setWeather('storm'); }, end: clearOwnWeather });
-  def('desolateland', { d: 'Extremely harsh sunlight while in this form: Fire x1.5, Water almost does nothing. Ends with the form.', start: function () { setWeather('harsh'); }, end: clearOwnWeather });
-  def('deltastream', { d: 'Strong winds while in this form: Flying-types lose their weaknesses. Ends with the form.', start: function () { setWeather('winds'); }, end: clearOwnWeather });
-  def('orichalcumpulse', { d: 'Summons harsh sunlight when it enters. In sun, Attack x1.33.', start: function () { setWeather('sun'); }, stat: function (p, s) { return s === 'atk' && sunny() ? 4 / 3 : 1; } });
+  def('electricsurge', terrainSetter('electric', 'Sets Electric Terrain: Electric moves x1.3 and nobody can fall asleep.'));
+  def('grassysurge', terrainSetter('grassy', 'Sets Grassy Terrain: Grass moves x1.3 and everyone slowly heals.'));
+  def('mistysurge', terrainSetter('misty', 'Sets Misty Terrain: Dragon moves x0.5 and nobody gets statused.'));
+  def('psychicsurge', terrainSetter('psychic', 'Sets Psychic Terrain: Psychic moves x1.3.'));
+  def('primordialsea', strongWeather('storm', 'Heavy rain while in this form: Water x1.5, Fire almost does nothing.'));
+  def('desolateland', strongWeather('harsh', 'Extremely harsh sunlight while in this form: Fire x1.5, Water almost does nothing.'));
+  def('deltastream', strongWeather('winds', 'Strong winds while in this form: Flying-types lose their weaknesses.'));
+  def('orichalcumpulse', Object.assign(weatherSetter('sun', 'harsh sunlight'), {
+    d: 'Summons harsh sunlight for the rest of the run (it returns if replaced). In sun, Attack x1.33.',
+    stat: function (p, s) { return s === 'atk' && sunny() ? 4 / 3 : 1; },
+  }));
   def('sandspit', { d: 'Summons a sandstorm whenever it is hit by an attack.', hit: function (p, h) { if (!h.env) setWeather('sand'); } });
   def('seedsower', { d: 'Sets Grassy Terrain whenever it is hit by an attack.', hit: function (p, h) { if (!h.env) setWeather('grassy'); } });
 
@@ -1081,6 +1130,13 @@
     Wx.mult = function () { return negated() ? 1 : _wm.apply(this, arguments); };
     var _ws = Wx.speedFor;
     Wx.speedFor = function () { return negated() ? 1 : _ws.apply(this, arguments); };
+    // Guests: a host repeat of the weather we already have would restart its fade-in; skip it.
+    var _wev = Wx.onEvent;
+    if (_wev) Wx.onEvent = function (msg) {
+      var c = Wx.current;
+      if (msg && msg[1] && c && c.kind === msg[1]) return;
+      return _wev.apply(this, arguments);
+    };
     var _wu = Wx.update;
     Wx.update = function (dt, t, player) {
       if (player && player === S.p && S.def) {
