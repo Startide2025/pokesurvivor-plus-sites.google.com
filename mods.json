@@ -3,6 +3,7 @@
     "render-scale",
     "ability-data",
     "abilities",
-    "ability-display"
+    "ability-display",
+    "save-fix",
   ]
 }
