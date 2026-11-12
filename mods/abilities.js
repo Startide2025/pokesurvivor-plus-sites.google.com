@@ -250,7 +250,7 @@
   // Replace base stats the way the game's form evolution does (keeps upgrades and speed bonuses).
   function setBaseStats(p, arr, hpMode) {
     var Pl = P().Player, oldSpd = p.baseSpd, k = p.spdMul / (p.spdPerm || p.spdMul || 1);
-    var dHp = arr[0] - p.bs.hp;
+    var dHp = hpMode === 'none' ? 0 : arr[0] - p.bs.hp;
     p.maxHp = Math.max(1, p.maxHp + dHp);
     p.hp = hpMode === 'add' ? clamp(p.hp + dHp, 1, p.maxHp) : Math.min(p.hp, p.maxHp);
     p.bs = { hp: arr[0], atk: arr[1], def: arr[2], spa: arr[3], sdf: arr[4], spe: arr[5] };
@@ -515,7 +515,10 @@
   def('furcoat', { d: 'Defense x2.', stat: function (p, s) { return s === 'def' ? 2 : 1; } });
   def('disguise', {
     d: 'Mimikyu\'s disguise takes the first hit for it; it loses 1/8 of max HP instead and becomes Busted.',
-    start: function (p) { S.v.busted = (p.mon.form === 'busted'); },
+    start: function (p) {
+      S.v.busted = !!S.v.busted || p.mon.form === 'busted';
+      if (S.v.busted && p.mon.dex === 778 && p.mon.form !== 'busted') setForm(p, 778, 'busted');
+    },
     in: function (p, h) {
       if (S.v.busted || h.env || p.mon.dex !== 778) return false;
       S.v.busted = true;
@@ -528,7 +531,7 @@
   });
   def('iceface', {
     d: 'Eiscue\'s ice head blocks the first physical hit. It reforms when snow or hail starts.',
-    start: function () { S.v.ice = true; },
+    start: function () { if (S.v.ice === undefined) S.v.ice = true; },
     in: function (p, h) {
       if (!S.v.ice || h.cat !== 'phys' || h.env) return false;
       S.v.ice = false; p.invuln = 0.45; say(p, 'Ice Face broke!');
@@ -632,7 +635,7 @@
 
   // ── Dealing hits: targets ──
   def('sniper', { d: 'Critical hits deal x1.5 more (x2.25 instead of x1.5).', out: function (p, e, o) { if (o.label === 'crit' || o.label === 'critsuper') o.dmg *= 1.5; } });
-  def('superluck', { d: 'Critical hit chance +1 stage (+20%, like a Scope Lens).', start: function (p) { p.critChance += CRIT_STAGE; S.v.crit = true; }, end: function (p) { if (S.v.crit) p.critChance -= CRIT_STAGE; } });
+  def('superluck', { d: 'Critical hit chance +1 stage (+20%, like a Scope Lens).', start: function (p) { if (!S.v.crit) { p.critChance += CRIT_STAGE; S.v.crit = true; } }, end: function (p) { if (S.v.crit) { p.critChance -= CRIT_STAGE; S.v.crit = false; } } });
   def('merciless', {
     d: 'Always lands critical hits on poisoned foes.',
     out: function (p, e, o) {
@@ -707,12 +710,19 @@
   });
   def('powerconstruct', {
     d: 'Zygarde transforms into its Complete Forme the first time it drops to half HP or below.',
+    start: function (p) {
+      var bs = P().BASE_STATS && P().BASE_STATS['718_complete'];
+      if (!S.v.pc || !bs || p.mon.dex !== 718 || p.mon.form === 'complete' || p.megaKey) return;
+      setBaseStats(p, bs, 'none'); // its max HP was saved with the Complete Forme bonus
+      setForm(p, 718, 'complete');
+    },
     tick: function (p) {
       if (p.mon.dex !== 718 || p.mon.form === 'complete' || p.megaKey || hpf(p) > 0.5 || p.dead) return;
       var bs = P().BASE_STATS && P().BASE_STATS['718_complete'];
       if (!bs) return;
       setBaseStats(p, bs, 'add');
       setForm(p, 718, 'complete');
+      S.v.pc = true;
       say(p, 'Power Construct!');
     },
   });
@@ -829,27 +839,64 @@
     if (!slots) return null;
     return slots[SLOT_IDX[S.slot] || 0] || slots[0];
   }
-  function switchAbility(p, id, quiet) {
+  function switchAbility(p, id, quiet, restored) {
     if (S.def && S.def.end) S.def.end(p);
     undoMoves();
     var keep = { freezeUntil: S.v.freezeUntil, inPoison: S.v.inPoison, hadItem: S.v.hadItem };
-    S.ab = id; S.def = AB[id] || null; S.v = keep;
+    S.ab = id; S.def = AB[id] || null; S.v = Object.assign(keep, restored || {});
     if (!S.def) { recalc(p); return; }
     if (!quiet && !S.def.none) say(p, (DATA.names[id] || id));
     if (S.def.start) S.def.start(p);
     recalc(p);
+  }
+  // Saved runs only keep the player's plain values, so ability state rides along as a JSON
+  // string property (a getter: always current whenever Save & Quit or the autosave runs).
+  // Only state that a resume must not redo or lose is kept: e.g. Super Luck's crit is already
+  // inside the saved critChance, so it must not be added again.
+  var PERSIST_V = ['crit', 'once', 'held', 'busted', 'ice', 'flashFire', 'charged', 'spikes', 'bonded', 'pc', 'hadItem', 'ripeAtk', 'ripeDef', 'loaf'];
+  function persist(p) {
+    var d = Object.getOwnPropertyDescriptor(p, 'psAb');
+    if (d && d.get) return;
+    Object.defineProperty(p, 'psAb', {
+      enumerable: true, configurable: true,
+      get: function () {
+        if (this !== S.p) return null;
+        var v = {};
+        PERSIST_V.forEach(function (k) { if (S.v[k] !== undefined) v[k] = S.v[k]; });
+        var stages = {};
+        STATS.forEach(function (s) { if (S.stages[s].n) stages[s] = { n: S.stages[s].n, t: S.stages[s].t }; });
+        return JSON.stringify({ ab: S.ab, slot: S.slot, perm: S.perm, stages: stages, v: v });
+      },
+      set: function () {},
+    });
+  }
+  function readPersisted(p) {
+    var d = Object.getOwnPropertyDescriptor(p, 'psAb');
+    if (!d || typeof d.value !== 'string') return null;
+    try { return JSON.parse(d.value); } catch (e) { return null; }
   }
   function startRun(p) {
     S.p = p; S.t = 0; S.turnT = 0; S.said = {}; S.v = {}; S.ab = null; S.def = null;
     S.striker = null; S.lastHit = null; S.lastSlowT = 0; S.berrySeen = null;
     resetStages();
     var sv = save();
-    var dex = p.dex;
+    var dex = p.baseDex || p.dex;
     if (sv) ensureAbilities(sv);
     S.baseDex = dex;
     S.slot = chosenSlot(dex);
+    // A resumed run brings its ability state back (see persist()); a fresh run has none.
+    var saved = readPersisted(p);
+    if (saved && saved.slot) S.slot = saved.slot;
     var id = abilityFor(p);
-    switchAbility(p, id, true);
+    if (saved) {
+      STATS.forEach(function (s) {
+        S.perm[s] = clamp(+(saved.perm && saved.perm[s]) || 0, -6, 6);
+        var st = saved.stages && saved.stages[s];
+        if (st) { S.stages[s].n = clamp(+st.n || 0, -6, 6); S.stages[s].t = +st.t || 0; }
+      });
+    }
+    switchAbility(p, id, true, saved && saved.ab === id ? saved.v : null);
+    persist(p);
     if (id) {
       var nm = DATA.names[id] || id;
       say(p, nm, S.def && S.def.none ? '#c9d1dc' : ABILITY_COLOR);
